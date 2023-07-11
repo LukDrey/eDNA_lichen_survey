@@ -13,6 +13,8 @@ library(stringr); packageVersion("stringr")
 
 library(GGally); packageVersion("GGally")
 
+library(data.table)
+
 ##################################################################
 ##                          Section 2                           ##
 ##         Data Loading, Data Cleaning and Initialization       ##
@@ -212,6 +214,10 @@ fungi_tax_fin <- tidyr::separate(fungi_tax_fin, Family, c(NA, 'Family') , sep = 
 fungi_tax_fin <- tidyr::separate(fungi_tax_fin, Genus, c(NA, 'Genus') , sep = '__')
 fungi_tax_fin <- tidyr::separate(fungi_tax_fin, Species, c(NA, 'Species') , sep = '__')
 
+# Keep only Fungi 
+fungi_tax_fin <- fungi_tax_fin %>% 
+  dplyr::filter(Kingdom == "Fungi")
+
 # Rename the ASV_ID column. 
 fungi_tax_fin <- dplyr::rename(fungi_tax_fin, ASV_ID = seq_name_fungi)
 
@@ -265,7 +271,7 @@ tax_funguild <- base::data.frame(ASV_ID = tax_fun_prep$ASV_ID)
 tax_funguild$taxonomy <- base::paste(tax_fun_prep$Kingdom, tax_fun_prep$Phylum, tax_fun_prep$Class, tax_fun_prep$Order,
                                tax_fun_prep$Family, tax_fun_prep$Genus, tax_fun_prep$Species, sep = ";")
 
-utils::write.table(tax_funguild, here::here("Data", "tax_funguild.tsv"), sep = "\t")
+utils::write.table(tax_funguild, here::here("Data", "tax_funguild.tsv"), sep = "\t", row.names = F, quote = F)
 
 # Funguild will be excuted on the server again since it is a Python Script. 
 
@@ -332,4 +338,26 @@ lichen_species_list <- metagMisc::phyloseq_to_df(phy_lichen_bark, addtax = T, so
   dplyr::select("OTU", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species", "Guild") %>% 
   dplyr::arrange(Class)
 
-write.csv(lichen_species_list, "lichen_species_list.csv")
+write.csv(lichen_species_list, "lichen_species_list_2.csv", row.names = F)
+
+lichen_list_old <- read.csv("lichen_species_list.csv")
+
+#################################################################
+##                          Section 6                          ##
+##                   Overlap between old and new               ##
+#################################################################
+
+# Find the overlap
+lichen_list_old$check <- ifelse(
+  paste(lichen_list_old$OTU, lichen_list_old$Genus, lichen_list_old$Species) %in% 
+  paste(lichen_species_list$OTU, lichen_species_list$Genus, lichen_species_list$Species), TRUE, FALSE)
+
+lichen_species_list$check <- ifelse(
+  paste(lichen_species_list$OTU, lichen_species_list$Genus, lichen_species_list$Species) %in%
+    paste(lichen_list_old$OTU, lichen_list_old$Genus, lichen_list_old$Species), TRUE, FALSE)
+
+
+
+
+                   
+  
