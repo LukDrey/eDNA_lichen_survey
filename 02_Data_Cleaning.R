@@ -4,16 +4,20 @@
 #################################################################
 
 library(here); packageVersion("here")
+# ‘1.0.1’
 
 library(dplyr); packageVersion("dplyr")
+# ‘1.1.2’
 
 library(phyloseq); packageVersion("phyloseq")
+# ‘1.44.0’
 
 library(stringr); packageVersion("stringr")
+# ‘1.5.0’
 
 library(GGally); packageVersion("GGally")
+# 2.1.2
 
-library(data.table)
 
 ##################################################################
 ##                          Section 2                           ##
@@ -49,9 +53,11 @@ sampling_weeks_clim <- climate %>%
 sampling_weeks_clim$datetime <- NULL
 
 # Calculate the average of the climate variable for each plot. 
+cols <- c("rH_200", "PAR", "precipitation_radolan", "Ta_200")
 sampling_weeks_clim_avg <- sampling_weeks_clim %>% 
   dplyr::group_by(plotID) %>%  
-  dplyr::summarise_each(dplyr::funs(base::round(base::mean(., na.rm = T), 2))) %>% 
+  dplyr::summarise(dplyr::across(dplyr::all_of(cols), mean)) %>%    
+  dplyr::mutate(dplyr::across(dplyr::all_of(cols), \(x) base::round(x, 2))) %>%  
   dplyr::rename(Plot_ID = plotID)
 
 # One of the plots (HEW33) had a broken thermometer so we replace the temperature 
@@ -126,15 +132,13 @@ plot_comp <- plot_comp %>%
 plot_comp_final <- plot_comp %>% 
   dplyr::select("Plot_ID", "dom_tot_ratio")
 
-# Load the geographical distances between plots. 
-################################################################################################
-####################################################################################
-###############################################################################
-#################################################################
-geo <- fread(here::here("Data", "basic_plot_info.csv"))
-geo <- geo[Landuse == "Forest", .(EP_Plot_ID, Latitude, Longitude)]
-geo <- geo[EP_Plot_ID != "na"]
-setnames(geo, old = "EP_Plot_ID", new = "Plot")
+# Load the coordinates for the plots. 
+# Available at https://www.bexis.uni-jena.de/ dataset ID 1000.
+geo <- utils::read.csv(here::here("Data", "basic_plot_info.csv"), sep = ";") %>% 
+  dplyr::filter(Landuse == "Forest") %>% 
+  dplyr::filter(EP_Plot_ID != "na") %>% 
+  dplyr::rename(Plot = EP_Plot_ID) %>% 
+  dplyr::select(Plot, Latitude, Longitude)
 
 # Combine all of our metadata into one big metadata table. 
 metadata_full <- plyr::join_all(base::list(own_metadata,
@@ -271,7 +275,7 @@ tax_funguild <- base::data.frame(ASV_ID = tax_fun_prep$ASV_ID)
 tax_funguild$taxonomy <- base::paste(tax_fun_prep$Kingdom, tax_fun_prep$Phylum, tax_fun_prep$Class, tax_fun_prep$Order,
                                tax_fun_prep$Family, tax_fun_prep$Genus, tax_fun_prep$Species, sep = ";")
 
-utils::write.table(tax_funguild, here::here("Data", "tax_funguild.tsv"), sep = "\t", row.names = F, quote = F)
+#utils::write.table(tax_funguild, here::here("Data", "tax_funguild.tsv"), sep = "\t", row.names = F, quote = F)
 
 # Funguild will be excuted on the server again since it is a Python Script. 
 
@@ -334,11 +338,11 @@ phy_lichen_soil <- phyloseq::subset_samples(phy_lichen, substrate == "soil") %>%
 # Species Lists
 ###
 
-lichen_species_list <- metagMisc::phyloseq_to_df(phy_lichen_bark, addtax = T, sorting = "taxonomy") %>% 
+eDNA_species_df <- metagMisc::phyloseq_to_df(phy_lichen_bark, addtax = T, sorting = "taxonomy") %>% 
   dplyr::select("OTU", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species", "Guild") %>% 
   dplyr::arrange(Class)
 
-write.csv(lichen_species_list, "lichen_species_list_2.csv", row.names = F)
+#write.csv(lichen_species_list, "lichen_species_list_2.csv", row.names = F)
 
 lichen_list_old <- read.csv("lichen_species_list.csv")
 
@@ -350,14 +354,92 @@ lichen_list_old <- read.csv("lichen_species_list.csv")
 # Find the overlap
 lichen_list_old$check <- ifelse(
   paste(lichen_list_old$OTU, lichen_list_old$Genus, lichen_list_old$Species) %in% 
-  paste(lichen_species_list$OTU, lichen_species_list$Genus, lichen_species_list$Species), TRUE, FALSE)
+  paste(eDNA_species_df$OTU, eDNA_species_df$Genus, eDNA_species_df$Species), TRUE, FALSE)
 
-lichen_species_list$check <- ifelse(
-  paste(lichen_species_list$OTU, lichen_species_list$Genus, lichen_species_list$Species) %in%
+eDNA_species_df$check <- ifelse(
+  paste(eDNA_species_df$OTU, eDNA_species_df$Genus, eDNA_species_df$Species) %in%
     paste(lichen_list_old$OTU, lichen_list_old$Genus, lichen_list_old$Species), TRUE, FALSE)
 
+# If an ASV does have a NA in Guild.x it was not in the old list. 
+# If it does have a NA in Guild.y than it was not in the new list.  
+diff_old_new <- dplyr::full_join(eDNA_species_df, lichen_list_old,
+                              by = c("OTU", "Kingdom", "Phylum", "Class", "Order", 
+                                     "Family", "Genus", "Species"))
+
+#################################################################
+##                          Section 7                          ##
+##          Overlap between floristic study and eDNA           ##
+#################################################################
+
+#####
+# Read in the data from the Steffen Boch paper 
+#####
+
+# lichen mapping
+lichen_forest <- utils::read.table(here::here('Data', 'lichen_diversity_forests', '4460.txt'), header = T)
+
+# read in MatrixData
+lichen_matrix  <- utils::read.table(here::here('Data', 'lichen_diversity_forests', 'MatrixData.txt'), header = T, sep = '|')
+
+#transform matrix data into usable format 
+trans_mat <- t(lichen_matrix)
+trans_dat <- as.data.frame(trans_mat)
+
+trans_dat <- tibble::rownames_to_column(trans_dat)
+
+lichen_species_pres <- trans_dat %>% 
+  janitor::clean_names() %>%
+  janitor::row_to_names(.,1, remove_row = T)
+
+lichen_species_pres <- lichen_species_pres %>% 
+  dplyr::rename(., PlotID = Plot_ID)
+
+# basic plot info
+plot_info <- read.table(here('Data', '20826.txt'), header = T, sep = '\t')
+
+# create big dataset containing all the info we need 
+
+full_lichen_div <- dplyr::left_join(plot_info, lichen_species_pres, by = 'PlotID')
 
 
+#####
+# data clean up
+#####
 
-                   
-  
+#only forest plots 
+
+forest_lichen_div <- dplyr::filter(full_lichen_div,
+                                   grepl('HEW|AEW|SEW', full_lichen_div$EP_PlotID))
+
+# make a list of the column names
+species_list <- gsub("\\^E.*", "", colnames(forest_lichen_div[,28:812])) %>% 
+  gsub("\\^G.*", "",.) %>% 
+  gsub("\\^T.*", "", .) %>% 
+  gsub("\\^B.*", "", .) %>% 
+  gsub("\\^M.*", "", .) %>%
+  unique() 
+
+floristic_species_df <- data.frame(species = species_list)
+
+# Split the species column into two columns Genus and Species based on the space in the middle. 
+
+floristic_species_df_clean <- floristic_species_df %>% 
+  tidyr::separate_wider_regex(cols = species,
+                              patterns = c(Genus = "(?:^Cf. .*)*(?:.*)*(?: )*(?!:agg.)", " ",
+                                           Species = "(?: )*(?:.*)")) %>% 
+  tidyr::separate_wider_regex(cols = Genus, 
+                              patterns = c(Genus = "(?:^Cf. \\w+)*(?:\\w+)",
+                                           Helper = ".*"), 
+                              too_few = "align_start")  %>%
+  dplyr::mutate(Helper = stringr::str_remove(Helper, "^[\\s]+")) %>%
+  dplyr::mutate(Species = stringr::str_remove(Species, "^[\\s]+")) %>% 
+  tidyr::unite("Species", Helper:Species, sep = " ") %>%
+  dplyr::mutate(Species = stringr::str_remove(Species, "^[\\s]+")) %>% 
+  dplyr::mutate(Species = stringr::str_remove(Species, "^[.]")) %>% 
+  dplyr::mutate(Genus = stringr::str_replace_all(Genus, "Cf$", "Cf.")) %>%
+  dplyr::mutate(Species = stringr::str_remove(Species, "^[\\s]+"))
+
+# Combine with the eDNA dataframe.
+
+combined_species_df <- dplyr::full_join(eDNA_species_df, floristic_species_df_clean,
+                                        by = c("Genus", "Species"))
