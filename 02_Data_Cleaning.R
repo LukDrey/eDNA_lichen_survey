@@ -340,7 +340,8 @@ phy_lichen_soil <- phyloseq::subset_samples(phy_lichen, substrate == "soil") %>%
 
 eDNA_species_df <- metagMisc::phyloseq_to_df(phy_lichen_bark, addtax = T, sorting = "taxonomy") %>% 
   dplyr::select("OTU", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species", "Guild") %>% 
-  dplyr::arrange(Class)
+  dplyr::arrange(Class) %>% 
+  dplyr::mutate(in_eDNA = "yes")
 
 #write.csv(lichen_species_list, "lichen_species_list_2.csv", row.names = F)
 
@@ -352,19 +353,10 @@ lichen_list_old <- read.csv("lichen_species_list.csv")
 #################################################################
 
 # Find the overlap
-lichen_list_old$check <- ifelse(
-  paste(lichen_list_old$OTU, lichen_list_old$Genus, lichen_list_old$Species) %in% 
-  paste(eDNA_species_df$OTU, eDNA_species_df$Genus, eDNA_species_df$Species), TRUE, FALSE)
-
-eDNA_species_df$check <- ifelse(
+eDNA_species_df$in_old <- ifelse(
   paste(eDNA_species_df$OTU, eDNA_species_df$Genus, eDNA_species_df$Species) %in%
-    paste(lichen_list_old$OTU, lichen_list_old$Genus, lichen_list_old$Species), TRUE, FALSE)
+    paste(lichen_list_old$OTU, lichen_list_old$Genus, lichen_list_old$Species), "yes", "no")
 
-# If an ASV does have a NA in Guild.x it was not in the old list. 
-# If it does have a NA in Guild.y than it was not in the new list.  
-diff_old_new <- dplyr::full_join(eDNA_species_df, lichen_list_old,
-                              by = c("OTU", "Kingdom", "Phylum", "Class", "Order", 
-                                     "Family", "Genus", "Species"))
 
 #################################################################
 ##                          Section 7                          ##
@@ -437,9 +429,105 @@ floristic_species_df_clean <- floristic_species_df %>%
   dplyr::mutate(Species = stringr::str_remove(Species, "^[\\s]+")) %>% 
   dplyr::mutate(Species = stringr::str_remove(Species, "^[.]")) %>% 
   dplyr::mutate(Genus = stringr::str_replace_all(Genus, "Cf$", "Cf.")) %>%
-  dplyr::mutate(Species = stringr::str_remove(Species, "^[\\s]+"))
+  dplyr::mutate(Species = stringr::str_remove(Species, "^[\\s]+")) %>% 
+  dplyr::mutate(in_floristic = "yes")
 
 # Combine with the eDNA dataframe.
 
 combined_species_df <- dplyr::full_join(eDNA_species_df, floristic_species_df_clean,
-                                        by = c("Genus", "Species"))
+                                        by = c("Genus", "Species")) %>% 
+  dplyr::mutate(in_eDNA = tidyr::replace_na(in_eDNA, "no"),
+                in_floristic = tidyr::replace_na(in_floristic, "no"))
+
+# Add the sequences so we can blast taxa that are NA for Genus or Species. 
+combined_species_df_seqs <- combined_species_df %>% 
+  dplyr::left_join(., dplyr::rename(fungi_rep_seqs, OTU = seq_name_fungi)) %>% 
+  dplyr::rename(Sequence = sequence_fungi, ASV_ID = OTU)
+
+unknown_species <- combined_species_df_seqs %>%
+  filter(is.na(Species))
+
+unknown_species_seqs <- unknown_species %>% 
+  dplyr::select(ASV_ID, Sequence)
+
+# Write a FASTA file for the unknown species so we can blast them.
+# First we need to define a function that lets us do that. 
+writeFasta <- function(data, filename){
+  fastaLines = c()
+  for (rowNum in 1:nrow(data)){
+    fastaLines = c(fastaLines, as.character(paste(">", data[rowNum,"ASV_ID"], sep = "")))
+    fastaLines = c(fastaLines,as.character(data[rowNum,"Sequence"]))
+  }
+  fileConn<-file(filename)
+  writeLines(fastaLines, fileConn)
+  close(fileConn)
+}
+
+# Then write the FASTA file.
+writeFasta(unknown_species_seqs, here("Data", "unknown_species_seqs.fa"))
+
+# On the server we run a local blastn search against the nt database. 
+
+# blastn -query unknown_species_seqs.fa \
+# -strand both \
+# -task megablast \
+# -db /phylodata/ldreyling/BigCampaign/full_data/NCBI_DB/"nt" \
+# -out ./unknown_species_taxonomy.txt \
+# -evalue 1E-5 \
+# -outfmt 6 \
+# -num_threads 20 \
+# -max_target_seqs 5 
+
+# Read the resulting table back in. 
+
+# Read in the taxonomy tables we created BLASTn.
+tax_unknown <- base::readRDS(here::here("Data", 'tax_table_unknown_species.rds'))
+
+# Convert to data frame.
+tax_unknown <- base::as.data.frame(tax_unknown)
+
+tax_unknown$taxaID <- NULL
+
+# Filter out any uncultured or environmental sequences. 
+tax_unknown_no_uncultured <- tax_unknown %>% 
+  dplyr::filter(!base::grepl('uncultured', species) ) %>% 
+  dplyr::filter(!base::grepl('environmental', species) )
+
+# Filter anything under 95 % percent identity.
+tax_unknown_good_blast <- tax_unknown_no_uncultured %>% 
+  dplyr::filter(percent_ident > 95.00)
+
+# Keep only the assignment with the highest percent identity for each ASV. 
+tax_unknown_highest_ident <- tax_unknown_good_blast %>% 
+  dplyr::group_by(ASV_ID) %>% 
+  dplyr::top_n(1, percent_ident)
+
+# Keep everything with a unique taxaID. 
+tax_unknown_unique_taxaID <- tax_unknown_highest_ident %>% 
+  dplyr::distinct(taxaID, .keep_all = T)
+
+# The data still contains duplicates since some ASVs can be assigned with the same level of confidence.
+# Remove duplicated ASV_IDs to only keep the top match in NCBI. 
+tax_clean_unknown <- tax_unknown_unique_taxaID %>% 
+  dplyr::distinct(ASV_ID, .keep_all = T) %>% 
+  base::data.frame()
+
+# Set the ASV ID as the rownames.
+base::row.names(tax_clean_unknown) <- tax_clean_unknown$ASV_ID
+
+#Remove all columns that are unnecessary now. 
+tax_clean_unknown[, c("ASV_ID","accession", "percent_ident", "length", "mismatches", 
+                    "gapopen", "qsstart", "qend", "subject_start", 
+                    "subject_end", "evalue", "bitscore", "taxaID")] <- base::list(NULL)
+
+# Add a kingdom column. 
+tax_clean_unknown <- base::cbind(Kingdom = "Fungi", tax_clean_unknown)
+
+# remove Superkingdom. 
+tax_clean_unknown$superkingdom <- NULL
+
+# NCBI writes the headers in lowercase. We change that to make it comparable with the two other groups. 
+tax_clean_unknown <- tax_clean_unknown %>% 
+  dplyr::rename_with(stringr::str_to_title)
+
+           
