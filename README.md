@@ -3,7 +3,7 @@
 This repository contains the data and the R script for the analysis accompanying our paper: 
 
 > Dreyling L, Boch S, Lumbsch HT and Schmitt I 2024. Surveying lichen diversity in forests: A comparison of expert mapping and eDNA metabarcoding of bark surfaces.
-> You can cite the dataset and code with the following [!DOI]()
+> You can cite the dataset and code with the following [![DOI](https://zenodo.org/badge/665109676.svg)](https://zenodo.org/doi/10.5281/zenodo.11489370).
 
 ![Comparison of eDNA metabarcoding to floristic survey.](https://github.com/LukDrey/eDNA_lichen_survey/blob/main/Data/Figure2.png)
 
