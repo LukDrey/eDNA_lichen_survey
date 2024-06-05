@@ -47,15 +47,7 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
-<<<<<<< HEAD
 
-*._*
-=======
-*.csv
-*.txt
-*.xml
-*.html
-*.rds
-*.fa
-*.xlsx
->>>>>>> parent of 05ef9c0 (Updated repository for publication)
+._*
+
+.DS_Store
